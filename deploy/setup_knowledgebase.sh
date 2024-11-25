@@ -72,11 +72,11 @@ payload1="{
 
 # 创建chatbot-index索引
 #echo $payload1 
-echo "delete existed index[chatbot-index-$COMPANY] of opensearch."
-curl -XDELETE "$OPENSEARCH_ENDPOINT/chatbot-index-$COMPANY" -H "Content-Type: application/json"
+echo "delete existed index[gamehus] of opensearch."
+curl -XDELETE "$OPENSEARCH_ENDPOINT/gamehus" -H "Content-Type: application/json"
 echo 
-echo "create new index[chatbot-index-$COMPANY] of opensearch"
-curl -XPUT "$OPENSEARCH_ENDPOINT/chatbot-index-$COMPANY" -H "Content-Type: application/json" -d "$payload1"
+echo "create new index[gamehus] of opensearch"
+curl -XPUT "$OPENSEARCH_ENDPOINT/gamehus" -H "Content-Type: application/json" -d "$payload1"
 echo
 echo
 payload2="{
@@ -88,7 +88,7 @@ payload2="{
            \"knn.algo_param.ef_search\": 32
        }
    },
-   \"mappings\": {
+   \"mappings\": {https://github.com/sharon-librae/private-llm-qa-bot
        \"properties\": {
            \"publish_date\" : {
                \"type\": \"date\",
