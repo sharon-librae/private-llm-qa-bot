@@ -42,7 +42,7 @@ REGION = args['REGION']
 
 publish_date = args['PUBLISH_DATE'] if 'PUBLISH_DATE' in args.keys() else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-INDEX_NAME = 'chatbot-index'
+INDEX_NAME = 'gamehus'
 EXAMPLE_INDEX_NAME = 'chatbot-example-index'
 EMB_BATCH_SIZE = int(args.get('emb_batch_size', '20'))
 print(f"EMB_BATCH_SIZE :{EMB_BATCH_SIZE}")
@@ -143,7 +143,7 @@ def batch_generator(generator, batch_size):
             break
         yield batch
 
-def iterate_paragraph(file_content, object_key, doc_classify,smr_client, index_name, endpoint_name):
+def iterate_paragraph(file_content, object_key, doc_classify, smr_client, index_name, endpoint_name):
     json_arr = json.loads(file_content)
     doc_title = object_key
     text_splitter = RecursiveCharacterTextSplitter(        
@@ -189,10 +189,26 @@ def iterate_paragraph(file_content, object_key, doc_classify,smr_client, index_n
             print("len of emb_src_texts :{}".format(len(emb_src_texts)))
             embeddings = get_embedding(smr_client, emb_src_texts, endpoint_name)
             for i, emb in enumerate(embeddings):
-                document = { "publish_date": publish_date, "idx": batch[i][0], "doc" : batch[i][1], "doc_type" : batch[i][2], "content" : batch[i][3], "doc_title": doc_title,"doc_author":doc_author,"doc_classify":doc_classify, "doc_category": doc_title, "embedding" : emb}
-                yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document['doc']).encode('utf-8')).hexdigest()}
+                document = { 
+                    "publish_date": publish_date, 
+                    "idx": batch[i][0], 
+                    "doc": batch[i][1], 
+                    "doc_type": batch[i][2], 
+                    "content": batch[i][3], 
+                    "doc_title": doc_title,
+                    "doc_author": doc_author,
+                    "doc_classify": doc_classify, 
+                    "doc_category": doc_title, 
+                    "embedding": emb,
+                    "company": COMPANY  # 添加company字段
+                }
+                yield {
+                    "_index": index_name, 
+                    "_source": document, 
+                    "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()  # 修改ID生成方式，加入company前缀
+                }
 
-def iterate_pdf_json(file_content, object_key,doc_classify, smr_client, index_name, endpoint_name):
+def iterate_pdf_json(file_content, object_key, doc_classify, smr_client, index_name, endpoint_name):
     json_arr = json.loads(file_content)
     doc_title = json_arr[0]['doc_title']
 
@@ -231,12 +247,28 @@ def iterate_pdf_json(file_content, object_key,doc_classify, smr_client, index_na
                 print("len of emb_src_texts :{}".format(len(emb_src_texts)))
                 embeddings = get_embedding(smr_client, emb_src_texts, endpoint_name)
                 for i, emb in enumerate(embeddings):
-                    document = { "publish_date": publish_date, "idx": batch[i][0], "doc" : batch[i][1], "doc_type" : batch[i][2], "content" : batch[i][3], "doc_title": doc_title,"doc_author":doc_author, "doc_category": batch[i][4], "doc_classify":doc_classify,"embedding" : emb}
-                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document['doc']).encode('utf-8')).hexdigest()}
+                    document = {
+                        "publish_date": publish_date,
+                        "idx": batch[i][0],
+                        "doc": batch[i][1],
+                        "doc_type": batch[i][2],
+                        "content": batch[i][3],
+                        "doc_title": doc_title,
+                        "doc_author": doc_author,
+                        "doc_category": batch[i][4],
+                        "doc_classify": doc_classify,
+                        "embedding": emb,
+                        "company": COMPANY
+                    }
+                    yield {
+                        "_index": index_name,
+                        "_source": document,
+                        "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()
+                    }
     except Exception as e:
         logging.exception(e)
 
-def iterate_QA(file_content, object_key,doc_classify,smr_client, index_name, endpoint_name):
+def iterate_QA(file_content, object_key, doc_classify, smr_client, index_name, endpoint_name):
     json_content = json.loads(file_content)
     json_arr = json_content["qa_list"]
     doc_title = object_key
@@ -260,8 +292,8 @@ def iterate_QA(file_content, object_key,doc_classify,smr_client, index_name, end
                 triggers = [ item['Trigger'] for item in batch ]
                 embeddings_trigger = get_embedding(smr_client, triggers, endpoint_name)
                 for i in range(len(doc_type_list)):
-                    document = { "publish_date": publish_date, "doc" : triggers[i], "idx": idx, "doc_type" : doc_type_list[i], "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_trigger[i]}
-                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document).encode('utf-8')).hexdigest()}
+                    document = { "publish_date": publish_date, "doc" : triggers[i], "idx": idx, "doc_type" : doc_type_list[i], "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_trigger[i], "company": COMPANY}
+                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()}
             else:
                 questions = [ item['Question'] for item in batch ]
                 answers = [ item['Answer'] for item in batch ]
@@ -270,10 +302,10 @@ def iterate_QA(file_content, object_key,doc_classify,smr_client, index_name, end
                 embeddings_q = get_embedding(smr_client, questions, endpoint_name)
                 embeddings_a = get_embedding(smr_client, answers, endpoint_name)
                 for i in range(len(doc_type_list)):
-                    document = { "publish_date": publish_date, "doc" : questions[i], "idx": idx, "doc_type" : "Question", "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_q[i]}
-                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document).encode('utf-8')).hexdigest()}
-                    document = { "publish_date": publish_date, "doc" : answers[i], "idx": idx,"doc_type" : "Paragraph", "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_a[i]}
-                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document).encode('utf-8')).hexdigest()}
+                    document = { "publish_date": publish_date, "doc" : questions[i], "idx": idx, "doc_type" : "Question", "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_q[i], "company": COMPANY}
+                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()}
+                    document = { "publish_date": publish_date, "doc" : answers[i], "idx": idx,"doc_type" : "Paragraph", "content" : contents[i], "doc_title": doc_title,"doc_author":authors[i] if authors[i] else doc_author, "doc_category": doc_category, "doc_meta": json.dumps(meta[i], ensure_ascii=False), "doc_classify":doc_classify,"embedding" : embeddings_a[i], "company": COMPANY}
+                    yield {"_index": index_name, "_source": document, "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()}
         except Exception as e:
             print(f"failed to process, {str(e)}")
 
@@ -300,8 +332,8 @@ def iterate_examples(file_content, object_key, smr_client, index_name, endpoint_
         for i, query in enumerate(queries):
             # print("query:")
             # print(query)
-            document = { "publish_date": publish_date, "detection" : detections[i], "query" : queries[i], "api_schema" : json.dumps(api_schema, ensure_ascii=False), "doc_title":doc_title, "embedding" : embeddings[i]}
-            yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document).encode('utf-8')).hexdigest()}
+            document = { "publish_date": publish_date, "detection" : detections[i], "query" : queries[i], "api_schema" : json.dumps(api_schema, ensure_ascii=False), "doc_title":doc_title, "embedding" : embeddings[i], "company": COMPANY}
+            yield {"_index": index_name, "_source": document, "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()}
             
 def link_header(semantic_snippets):
     heading_fonts_arr = [ item.metadata['heading_font'] for item in semantic_snippets ]
@@ -614,7 +646,7 @@ def load_content_json_from_s3(bucket, object_key, content_type, credentials):
         
         return json_content
 
-def iterate_paragraph_blog(content_json, object_key,doc_classify,smr_client, index_name, endpoint_name):
+def iterate_paragraph_blog(file_content, object_key, doc_classify, smr_client, index_name, endpoint_name):
     doc_title = object_key
     text_splitter = RecursiveCharacterTextSplitter(        
         chunk_size = CHUNK_SIZE,
@@ -638,7 +670,7 @@ def iterate_paragraph_blog(content_json, object_key,doc_classify,smr_client, ind
                 # for sent in (sent for sent in sentences if len(sent) > Sentence_Len_Threshold): 
                 #     yield (idx, sent, 'Sentence', paragraph_content,doc_title)
 
-    generator = chunk_generator(content_json)
+    generator = chunk_generator(file_content)
     batches = batch_generator(generator, batch_size=EMB_BATCH_SIZE)
     doc_author = get_filename_from_obj_key(object_key)
     for batch in batches:
@@ -647,11 +679,27 @@ def iterate_paragraph_blog(content_json, object_key,doc_classify,smr_client, ind
             print("len of emb_src_texts :{}".format(len(emb_src_texts)))
             embeddings = get_embedding(smr_client, emb_src_texts, endpoint_name)
             for i, emb in enumerate(embeddings):
-                document = { "publish_date": publish_date, "idx": batch[i][0], "doc" : batch[i][1], "doc_type" : batch[i][2], "content" : batch[i][3], "doc_title": doc_title, "doc_author":doc_author,"doc_category": batch[i][4], "doc_classify":doc_classify,"embedding" : emb}
-                yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document['doc']).encode('utf-8')).hexdigest()}
+                document = {
+                    "publish_date": publish_date,
+                    "idx": batch[i][0],
+                    "doc": batch[i][1],
+                    "doc_type": batch[i][2],
+                    "content": batch[i][3],
+                    "doc_title": doc_title,
+                    "doc_author": doc_author,
+                    "doc_category": batch[i][4],
+                    "doc_classify": doc_classify,
+                    "embedding": emb,
+                    "company": COMPANY
+                }
+                yield {
+                    "_index": index_name,
+                    "_source": document,
+                    "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()
+                }
                 
 
-def iterate_paragraph_wiki(content_json, object_key,doc_classify,smr_client, index_name, endpoint_name):
+def iterate_paragraph_wiki(file_content, object_key, doc_classify, smr_client, index_name, endpoint_name):
     doc_title = object_key
     text_splitter = RecursiveCharacterTextSplitter(        
         chunk_size = CHUNK_SIZE,
@@ -670,12 +718,12 @@ def iterate_paragraph_wiki(content_json, object_key,doc_classify,smr_client, ind
                     idx += 1
                     yield (idx, paragraph_content, 'Paragraph', paragraph_content,url)
                     ## add embedding for sentence
-                    # 实测效果并不好，造成召回内容干扰
+                    # 实测效果并不好，造成召回内容干
                     # sentences = re.split('[。？?.！!]', paragraph_content)
                     # for sent in (sent for sent in sentences if len(sent) > Sentence_Len_Threshold): 
                     #     yield (idx, sent, 'Sentence', paragraph_content,doc_title,url)
 
-    generator = chunk_generator(content_json)
+    generator = chunk_generator(file_content)
     batches = batch_generator(generator, batch_size=EMB_BATCH_SIZE)
     doc_author = get_filename_from_obj_key(object_key)
     for batch in batches:
@@ -684,12 +732,28 @@ def iterate_paragraph_wiki(content_json, object_key,doc_classify,smr_client, ind
             print("len of emb_src_texts :{}".format(len(emb_src_texts)))
             embeddings = get_embedding(smr_client, emb_src_texts, endpoint_name)
             for i, emb in enumerate(embeddings):
-                document = { "publish_date": publish_date, "idx": batch[i][0], "doc" : batch[i][1], "doc_type" : batch[i][2], "content" : batch[i][3], "doc_title": doc_title, "doc_author":doc_author,"doc_category": batch[i][4], "doc_classify":doc_classify,"embedding" : emb}
-                yield {"_index": index_name, "_source": document, "_id": hashlib.md5(str(document['doc']).encode('utf-8')).hexdigest()}
+                document = {
+                    "publish_date": publish_date,
+                    "idx": batch[i][0],
+                    "doc": batch[i][1],
+                    "doc_type": batch[i][2],
+                    "content": batch[i][3],
+                    "doc_title": doc_title,
+                    "doc_author": doc_author,
+                    "doc_category": batch[i][4],
+                    "doc_classify": doc_classify,
+                    "embedding": emb,
+                    "company": COMPANY
+                }
+                yield {
+                    "_index": index_name,
+                    "_source": document,
+                    "_id": hashlib.md5(f"{COMPANY}_{str(document['doc'])}".encode('utf-8')).hexdigest()
+                }
 
 
 
-def put_idx_to_ddb(filename,company,username,index_name,embedding_model,category,createtime):
+def put_idx_to_ddb(filename, company, username, index_name, embedding_model, category, createtime):
     try:
         dynamodb.put_item(
             Item={
@@ -717,42 +781,42 @@ def put_idx_to_ddb(filename,company,username,index_name,embedding_model,category
             },
             TableName = DOC_INDEX_TABLE,
         )
-        print(f"Put filename:{filename} with embedding:{embedding_model} index_name:{index_name} by user:{username} to ddb success")
+        print(f"Put filename:{filename} with embedding:{embedding_model} index_name:{index_name} by user:{username} company:{company} to ddb success")
         return True
     except Exception as e:
-        print(f"Not found filename:{filename} with embedding:{embedding_model} index_name:{index_name} to ddb: {str(e)}")
+        print(f"Failed to put filename:{filename} with embedding:{embedding_model} index_name:{index_name} company:{company} to ddb: {str(e)}")
         return False 
 
 
-def query_idx_from_ddb(filename,username,embedding_model):
+def query_idx_from_ddb(filename, username, embedding_model, company):
     try:
         response = dynamodb.query(
             TableName=DOC_INDEX_TABLE,
             ExpressionAttributeValues={
-                ':v1': {
-                    'S': filename,
-                },
-                ':v2': {
-                    'S': username,
-                },
-                ':v3': {
-                    'S': embedding_model,
-                }
+                ':v1': {'S': filename},
+                ':v2': {'S': username},
+                ':v3': {'S': embedding_model},
+                ':v4': {'S': company}
             },
             KeyConditionExpression='filename = :v1 and username = :v2',
-            ExpressionAttributeNames={"#e":"embedding_model"},
-            FilterExpression='#e = :v3',
+            ExpressionAttributeNames={
+                "#e": "embedding_model",
+                "#c": "company"  # 添加company字段名映射
+            },
+            FilterExpression='#e = :v3 AND #c = :v4',  # 修改过滤条件，加入company
             ProjectionExpression='index_name'
         )
+        
         if len(response['Items']):
             index_name = response['Items'][0]['index_name']['S'] 
         else:
             index_name = ''
-        print (f"query filename:{filename} with embedding:{embedding_model} index_name:{index_name} from ddb")
+            
+        print(f"query filename:{filename} with embedding:{embedding_model} company:{company} index_name:{index_name} from ddb")
         return index_name
     
     except Exception as e:
-        print(f"Not found filename:{filename}, username:{username}, embedding_model:{embedding_model} index from ddb")
+        print(f"Not found filename:{filename}, username:{username}, company:{company}, embedding_model:{embedding_model} index from ddb")
         return ''
 
     
@@ -856,26 +920,26 @@ def process_s3_uploaded_file(bucket, object_key):
         obj = s3.Object(bucket,object_key)
         metadata = obj.metadata
         
-
         doc_classify = unquote(metadata.get('category','') if metadata else '')
-        # COMPANY should passed by args
-        if  content_type == 'example':
-            index_name = f"chatbot-example-index-{COMPANY}"
-        else:
-            index_name = f"{INDEX_NAME}-{COMPANY}"
-
-
-            
-        print(metadata)
+        
+        # 使用固定的索引名称
+        index_name = INDEX_NAME
+        
         print(f'use index :{index_name}')
+        
         #check if it is already built
-        idx_name = query_idx_from_ddb(object_key,username,EMB_MODEL_ENDPOINT)
+        idx_name = query_idx_from_ddb(
+            filename=object_key,
+            username=username,
+            embedding_model=EMB_MODEL_ENDPOINT,
+            company=COMPANY  # 添加company参数
+        )
+        
         if len(idx_name) > 0:
             print("doc file already exists")
             return
         
-
-        response = WriteVecIndexToAOS(bucket, object_key, content_type,doc_classify, smr_client, index_name=index_name)
+        response = WriteVecIndexToAOS(bucket, object_key, content_type, doc_classify, smr_client, index_name=index_name)
         print("response:")
         print(response)
         print("ingest {} chunk to AOS".format(response[0]))
