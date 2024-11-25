@@ -62,6 +62,9 @@ payload1="{
                         \"m\": 16
                     }
                 }            
+            },
+            \"company\": {
+                \"type\": \"keyword\"
             }
         }
     }
