@@ -217,16 +217,18 @@ class CustomDocRetriever(BaseRetriever):
     embedding_model_endpoint :str
     aos_endpoint: str
     aos_index: str
+    company: str = 'default'  # 添加company属性
         
     class Config:
         """Configuration for this pydantic object."""
         arbitrary_types_allowed = True
         
     @classmethod
-    def from_endpoints(cls,embedding_model_endpoint:str, aos_endpoint:str, aos_index:str,):
+    def from_endpoints(cls, embedding_model_endpoint:str, aos_endpoint:str, aos_index:str, company:str='default'):
         return cls(embedding_model_endpoint=embedding_model_endpoint,
                   aos_endpoint=aos_endpoint,
-                  aos_index=aos_index)
+                  aos_index=aos_index,
+                  company=company)  # 传入company参数
     
     #this is for standard langchain interface
     def get_relevant_documents(self, query_input: str) -> List[Document]:
@@ -255,7 +257,10 @@ class CustomDocRetriever(BaseRetriever):
                 connection_class=RequestsHttpConnection
             )
         start = time.time()
-        opensearch_knn_respose = search_using_aos_knn(aos_client,query_embedding[0], self.aos_index,size=3)
+        opensearch_knn_respose = search_using_aos_knn(aos_client,query_embedding[0], 
+                                                     self.aos_index,
+                                                     size=3,
+                                                     company=self.company)  # 添加 company 参数
         elpase_time = time.time() - start
         logger.info(f'runing time of quick_knn_fetch : {elpase_time:.3f}s')
         filter_knn_result = [item for item in opensearch_knn_respose if (item['score'] > KNN_QUICK_PEFETCH_THRESHOLD and item['doc_type'] == 'Question')]
@@ -282,46 +287,63 @@ class CustomDocRetriever(BaseRetriever):
                 key = f"{item['doc_title']}-{item['doc_category']}-{item['idx']}"
                 if key not in docs_dict:
                     docs_dict[key] = item['idx']
-                    doc = self.search_paragraph_neighbours(client,item['idx'],item['doc_title'],item['doc_category'],item['doc_type'])
-                    docs.append({ **item, "doc": doc } )
+                    doc = self.search_paragraph_neighbours(
+                        client, 
+                        item['idx'], 
+                        item['doc_title'],
+                        item['doc_category'],
+                        item['doc_type'],
+                        company=self.company  # 添加company参数
+                    )
+                    if doc:
+                        docs.append({ **item, "doc": doc } )
             else:
                 docs.append(item)
         return docs
 
-    def search_paragraph_neighbours(self,client, idx, doc_title,doc_category,doc_type):
-        query ={
+    def search_paragraph_neighbours(self,client, idx, doc_title,doc_category,doc_type, company='default'):
+        """
+        添加company参数用于过滤
+        """
+        query = {
             "query":{
                 "bool": {
-                "must": [
-                    {
-                    "terms": {
-                        "idx": [i for i in range(idx-NEIGHBORS,idx+NEIGHBORS+1)]
-                    }
-                    },
-                    {
-                    "terms": {
-                        "doc_title": [doc_title]
-                    }
-                    },
-                    {
-                  "terms": {
-                    "doc_category": [doc_category]
-                    }
-                    },
-                    {
-                    "terms": {
-                        "doc_type": [doc_type]
-                    }
-                    }
-                ]
+                    "must": [
+                        {
+                            "terms": {
+                                "idx": [i for i in range(idx-NEIGHBORS,idx+NEIGHBORS+1)]
+                            }
+                        },
+                        {
+                            "terms": {
+                                "doc_title": [doc_title]
+                            }
+                        },
+                        {
+                            "terms": {
+                                "doc_category": [doc_category]
+                            }
+                        },
+                        {
+                            "terms": {
+                                "doc_type": [doc_type]
+                            }
+                        },
+                        {
+                            "term": {
+                                "company": company
+                            }
+                        }
+                    ]
                 }
             }
         }
+        
         query_response = client.search(
             body=query,
             index=self.aos_index
         )
-         ## the 'Sentence' type has mappings sentence:content:idx = n:1:1, so need to filter out the duplicate idx
+        
         idx_dict = {}
         doc = ''
         for item in query_response["hits"]["hits"]:
@@ -349,11 +371,15 @@ class CustomDocRetriever(BaseRetriever):
         scores = json_obj['scores']
         return scores if isinstance(scores, list) else [scores]
     
-    def de_duplicate(self,docs):
+    def de_duplicate(self, docs):
+        """
+        添加 company 作为唯一性判断的一部分
+        """
         unique_ids = set()
         nodup = []
         for item in docs:
-            doc_hash = hashlib.md5(str(item['doc']).encode('utf-8')).hexdigest()
+            # 将 company 加入到唯一性判断中
+            doc_hash = hashlib.md5(f"{str(item['doc'])}-{self.company}".encode('utf-8')).hexdigest()
             if doc_hash not in unique_ids:
                 nodup.append(item)
                 unique_ids.add(doc_hash)
@@ -413,14 +439,22 @@ class CustomDocRetriever(BaseRetriever):
                 connection_class=RequestsHttpConnection
             )
         start = time.time()
-        opensearch_knn_respose = search_using_aos_knn(aos_client,query_embedding[0], self.aos_index,size=CHANNEL_RET_CNT)
+        opensearch_knn_respose = search_using_aos_knn(aos_client,
+                                                     query_embedding[0], 
+                                                     self.aos_index,
+                                                     size=CHANNEL_RET_CNT,
+                                                     company=self.company)  # 添加 company 参数
         elpase_time = time.time() - start
         logger.info(f'runing time of opensearch_knn : {elpase_time}s seconds')
         
         # 4. get AOS invertedIndex recall
         start = time.time()
-        opensearch_query_response = aos_search(aos_client, self.aos_index, "doc", query_input,size=CHANNEL_RET_CNT)
-        # logger.info(opensearch_query_response)
+        opensearch_query_response = aos_search(aos_client, 
+                                             self.aos_index, 
+                                             "doc", 
+                                             query_input,
+                                             size=CHANNEL_RET_CNT,
+                                             company=self.company)  # 添加 company 参数
         elpase_time = time.time() - start
         logger.info(f'runing time of opensearch_query : {elpase_time}s seconds')
 
@@ -430,11 +464,11 @@ class CustomDocRetriever(BaseRetriever):
             filter knn_result if the result don't appear in filter_inverted_result
             '''
             def get_topk_items(opensearch_knn_respose, opensearch_query_response, topk=1):
-
                 opensearch_knn_nodup = []
                 knn_unique_ids = set()
                 for item in opensearch_knn_respose:
-                    doc_hash = hashlib.md5(str(item['doc']).encode('utf-8')).hexdigest()
+                    # 添加 company 到唯一性判断中
+                    doc_hash = hashlib.md5(f"{str(item['doc'])}-{self.company}".encode('utf-8')).hexdigest()
                     if doc_hash not in knn_unique_ids:
                         opensearch_knn_nodup.append(item)
                         knn_unique_ids.add(doc_hash)
@@ -442,10 +476,10 @@ class CustomDocRetriever(BaseRetriever):
                 opensearch_bm25_nodup = []
                 bm25_unique_ids = set()
                 for item in opensearch_query_response:
-                    doc_hash = hashlib.md5(str(item['doc']).encode('utf-8')).hexdigest()
+                    # 添加 company 到唯一性判断中
+                    doc_hash = hashlib.md5(f"{str(item['doc'])}-{self.company}".encode('utf-8')).hexdigest()
                     if doc_hash not in bm25_unique_ids:
                         opensearch_bm25_nodup.append(item)
-                        doc_hash = hashlib.md5(str(item['doc']).encode('utf-8')).hexdigest()
                         bm25_unique_ids.add(doc_hash)
 
                 opensearch_knn_nodup.sort(key=lambda x: x['score'])
@@ -463,7 +497,7 @@ class CustomDocRetriever(BaseRetriever):
                     if len(kg_combine_result) >= topk:
                         break
                         
-                    if hashlib.md5(str(item['doc']).encode('utf-8')).hexdigest() not in doc_hash:
+                    if hashlib.md5(f"{str(item['doc'])}-{self.company}".encode('utf-8')).hexdigest() not in doc_hash:
                         kg_combine_result.append(item)
                         logger.info(f'kg_combine_result.append')
                     else:
@@ -499,7 +533,7 @@ class CustomDocRetriever(BaseRetriever):
                         search_scores = self.rerank(query_input, web_knowledge,sm_client,cross_model_endpoint)
                         sorted_indices = sorted(range(len(search_scores)), key=lambda i: search_scores[i], reverse=False)
                         
-                        ## 过滤websearch结果
+                        ## 过滤websearch���果
                         sorted_web_knowledge = [{**web_knowledge[idx],'rank_score':search_scores[idx] } for idx in sorted_indices if search_scores[idx]>=WEBSEARCH_THRESHOLD] 
                         ## 前面返回的是snippet内容，可以对结果继续用爬虫抓取完整内容
                         sorted_web_knowledge = add_webpage_content(sorted_web_knowledge)
@@ -514,7 +548,7 @@ class CustomDocRetriever(BaseRetriever):
                     search_scores = self.rerank(query_input, web_knowledge,sm_client,cross_model_endpoint)
                     sorted_indices = sorted(range(len(search_scores)), key=lambda i: search_scores[i], reverse=False)
                     sorted_web_knowledge = [{**web_knowledge[idx],'rank_score':search_scores[idx] } for idx in sorted_indices if search_scores[idx]>=WEBSEARCH_THRESHOLD]
-                    ## 前面返回的是snippet内容，可以对结果继续用爬虫抓取完整内容
+                    ## 前面返���的是snippet内容，可以对结果继续用爬虫抓取完整内容
                     recall_knowledge = add_webpage_content(sorted_web_knowledge)
 
             #filter unrelevant knowledge by rerank score
@@ -566,11 +600,20 @@ def handle_error(func):
 
     return wrapper
 
-def detect_intention(query, example_index='chatbot-example-index',fewshot_cnt=5):
-    msg = {"fewshot_cnt":fewshot_cnt, "query": query,"example_index":example_index}
-    invoke_response = lambda_client.invoke(FunctionName="Detect_Intention",
-                                           InvocationType='RequestResponse',
-                                           Payload=json.dumps(msg))
+def detect_intention(query, example_index='chatbot-example-index', fewshot_cnt=5):
+    """
+    确保意图检测也考虑 company 参数
+    """
+    msg = {
+        "fewshot_cnt": fewshot_cnt, 
+        "query": query,
+        "example_index": example_index,  # 这里已经在 lambda_handler 中根据 company 修改了 example_index
+    }
+    invoke_response = lambda_client.invoke(
+        FunctionName="Detect_Intention",
+        InvocationType='RequestResponse',
+        Payload=json.dumps(msg)
+    )
     response_body = invoke_response['Payload']
 
     response_str = response_body.read().decode("unicode_escape")
@@ -687,23 +730,33 @@ def get_vector_by_sm_endpoint(questions, sm_client, endpoint_name):
     embeddings = json_obj['sentence_embeddings']
     return embeddings
 
-def search_using_aos_knn(client, q_embedding, index, size=10):
-
-    #Note: 查询时无需指定排序方式，最临近的向量分数越高，做过归一化(0.0~1.0)
-    #精准Knn的查询语法参考 https://opensearch.org/docs/latest/search-plugins/knn/knn-score-script/
-    #模糊Knn的查询语法参考 https://opensearch.org/docs/latest/search-plugins/knn/approximate-knn/
-    #这里采用的是模糊查询
+def search_using_aos_knn(client, q_embedding, index, size=10, company='default'):
+    """
+    添加company参数用于过滤
+    """
     query = {
         "size": size,
         "query": {
-            "knn": {
-                "embedding": {
-                    "vector": q_embedding,
-                    "k": size
-                }
+            "bool": {
+                "must": [
+                    {
+                        "knn": {
+                            "embedding": {
+                                "vector": q_embedding,
+                                "k": size
+                            }
+                        }
+                    },
+                    {
+                        "term": {
+                            "company": company
+                        }
+                    }
+                ]
             }
         }
     }
+    
     opensearch_knn_respose = []
     query_response = client.search(
         body=query,
@@ -711,17 +764,10 @@ def search_using_aos_knn(client, q_embedding, index, size=10):
     )
     opensearch_knn_respose = [{'idx':item['_source'].get('idx',1),'doc_category':item['_source']['doc_category'],'doc_classify':item['_source'].get('doc_classify'),'doc_title':item['_source']['doc_title'],'id':item['_id'],'doc':item['_source']['content'],"doc_type":item["_source"]["doc_type"],"score":item["_score"],'doc_author': item['_source']['doc_author'], 'doc_meta': item['_source'].get('doc_meta','')}  for item in query_response["hits"]["hits"]]
     return opensearch_knn_respose
-    
 
-
-def aos_search(client, index_name, field, query_term, exactly_match=False, size=10):
+def aos_search(client, index_name, field, query_term, exactly_match=False, size=10, company='default'):
     """
-    search opensearch with query.
-    :param host: AOS endpoint
-    :param index_name: Target Index Name
-    :param field: search field
-    :param query_term: query term
-    :return: aos response json
+    添加company参数用于过滤
     """
     if not isinstance(client, OpenSearch):   
         client = OpenSearch(
@@ -731,15 +777,27 @@ def aos_search(client, index_name, field, query_term, exactly_match=False, size=
             verify_certs=True,
             connection_class=RequestsHttpConnection
         )
+    
     query = None
     if exactly_match:
-        query =  {
-            "query" : {
-                "match_phrase":{
-                    "doc": {
-                        "query": query_term,
-                        "analyzer": "ik_smart"
-                      }
+        query = {
+            "query": {
+                "bool": {
+                    "must": [
+                        {
+                            "match_phrase": {
+                                "doc": {
+                                    "query": query_term,
+                                    "analyzer": "ik_smart"
+                                }
+                            }
+                        },
+                        {
+                            "term": {
+                                "company": company
+                            }
+                        }
+                    ]
                 }
             }
         }
@@ -747,7 +805,20 @@ def aos_search(client, index_name, field, query_term, exactly_match=False, size=
         query = {
             "size": size,
             "query": {
-                "match": { "content" : query_term }
+                "bool": {
+                    "must": [
+                        {
+                            "match": { 
+                                "content": query_term 
+                            }
+                        },
+                        {
+                            "term": {
+                                "company": company
+                            }
+                        }
+                    ]
+                }
             },
             "sort": [{
                 "_score": {
@@ -755,6 +826,7 @@ def aos_search(client, index_name, field, query_term, exactly_match=False, size=
                 }
             }]
         }
+
     query_response = client.search(
         body=query,
         index=index_name
@@ -1052,8 +1124,8 @@ def create_chat_prompt_templete(prompt_template='', llm_model_name='claude'):
     if llm_model_name.startswith('claude'):
         prompt_template_zh = """Human: {system_role_prompt}{role_bot}Here is the conversation history (between the user and you) prior to the question. It could be empty if there is no history:
 <history> {chat_history} </history>
-Here is the user’s question: <question> {question} </question>
-How do you respond to the user’s question?
+Here is the user's question: <question> {question} </question>
+How do you respond to the user's question?
 Think about your answer first before you respond.
 Assistant:"""
         PROMPT = PromptTemplate(
@@ -1099,7 +1171,7 @@ def get_reply_stratgy(recall_knowledge,refuse_strategy:str):
     if CROSS_MODEL_ENDPOINT:
         rank_score = [item['rank_score'] for item in recall_knowledge]
         if max(rank_score) < RERANK_THRESHOLD:  ##如果所有的知识都不超过rank score阈值
-            ##如果希望LLM利用自有知识回答，则改成LLM_ONLY，否则SAY_DONT_KNOW
+            ##如果希望LLM利用自有知���回答，则改成LLM_ONLY，否则SAY_DONT_KNOW
             if refuse_strategy == 'SAY_DONT_KNOW':
                 stratgy = ReplyStratgy.SAY_DONT_KNOW
             elif refuse_strategy == 'WITH_LLM':
@@ -1130,8 +1202,8 @@ def get_reply_stratgy(recall_knowledge,refuse_strategy:str):
                     stratgy = ReplyStratgy(min(ReplyStratgy.RETURN_OPTIONS.value, stratgy.value))
         return stratgy
 
-def main_entry_new(user_id:str,wsconnection_id:str,session_id:str, query_input:str, embedding_model_endpoint:str, llm_model_endpoint:str, llm_model_name:str, aos_endpoint:str, aos_index:str, aos_knn_field:str, aos_result_num:int, kendra_index_id:str, 
-                   kendra_result_num:int,use_qa:bool,wsclient=None,msgid:str='',max_tokens:int = 2048,temperature:float = 0.1,template:str = '',images_base64:List[str] = None,multi_rounds:bool = False, hide_ref:bool = False,use_stream:bool=False,example_index:str='chatbot-example-index',use_search:bool=True,refuse_strategy:str = 'LLM_ONLY',refuse_answer:str = '', email_reply_mode=False):
+def main_entry_new(user_id:str, wsconnection_id:str, session_id:str, query_input:str, embedding_model_endpoint:str, llm_model_endpoint:str, llm_model_name:str, aos_endpoint:str, aos_index:str, aos_knn_field:str, aos_result_num:int, kendra_index_id:str, 
+                   kendra_result_num:int, use_qa:bool, wsclient=None, msgid:str='', max_tokens:int = 2048, temperature:float = 0.1, template:str = '', images_base64:List[str] = None, multi_rounds:bool = False, hide_ref:bool = False, use_stream:bool=False, example_index:str='chatbot-example-index', use_search:bool=True, refuse_strategy:str = 'LLM_ONLY', refuse_answer:str = '', email_reply_mode=False, company:str='default'):
     """
     Entry point for the Lambda function.
 
@@ -1233,7 +1305,8 @@ def main_entry_new(user_id:str,wsconnection_id:str,session_id:str, query_input:s
     
     doc_retriever = CustomDocRetriever.from_endpoints(embedding_model_endpoint=embedding_model_endpoint,
                                     aos_endpoint= aos_endpoint,
-                                    aos_index=aos_index)
+                                    aos_index=aos_index,
+                                    company=company)
     
     TRACE_LOGGER.trace(f'**Using LLM model : {llm_model_name}**')
     cache_answer = None
@@ -1548,7 +1621,7 @@ def lambda_handler(event, context):
     ###其他管理操作 start
     ###其他管理操作 start
     if resource:
-        ret_json = management_api(method,resource,event)
+        ret_json = management_api(method, resource, event)
         return ret_json
 
     ####其他管理操作 end
@@ -1581,7 +1654,7 @@ def lambda_handler(event, context):
     # aos_index = os.environ.get("aos_index", "")
     company = event.get("company",'default')
     example_index = "chatbot-example-index"
-    aos_index = f'chatbot-index-{company}'
+    aos_index = 'gamehus'
     example_index = f'chatbot-example-index-{company}'
     refuse_strategy = event.get('refuse_strategy','')
     refuse_answer = event.get('refuse_answer','对不起，我不太清楚这个问题，请问问人工吧')
@@ -1602,7 +1675,8 @@ def lambda_handler(event, context):
     if retrieve_only:
         doc_retriever = CustomDocRetriever.from_endpoints(embedding_model_endpoint=embedding_endpoint,
                                     aos_endpoint= os.environ.get("aos_endpoint", ""),
-                                    aos_index=aos_index)
+                                    aos_index=aos_index,
+                                    company=company)
         recall_knowledge,opensearch_knn_respose,opensearch_query_response = doc_retriever.get_relevant_documents_custom(question) 
         extra_info = {"query_input": question, "opensearch_query_response" : opensearch_query_response, "opensearch_knn_respose": opensearch_knn_respose,"recall_knowledge":recall_knowledge }
         return {
@@ -1682,8 +1756,37 @@ def lambda_handler(event, context):
     global TRACE_LOGGER
     TRACE_LOGGER = TraceLogger(wsclient=wsclient,msgid=msgid,connectionId=wsconnection_id,stream=use_stream,use_trace=use_trace,hide_ref=hide_ref)
     main_entry_start = time.time()  # 或者使用 time.time_ns() 获取纳秒级别的时间戳
-    answer,ref_text,use_stream,query_input,opensearch_query_response,opensearch_knn_respose,recall_knowledge = main_entry_new(user_id,wsconnection_id,session_id, question, embedding_endpoint, llm_endpoint, model_name, aos_endpoint, aos_index, aos_knn_field, aos_result_num,
-                       Kendra_index_id, Kendra_result_num,use_qa,wsclient,msgid,max_tokens,temperature,prompt_template,images_base64,multi_rounds,hide_ref,use_stream,example_index,use_search,refuse_strategy,refuse_answer, email_reply_mode)
+    answer,ref_text,use_stream,query_input,opensearch_query_response,opensearch_knn_respose,recall_knowledge = main_entry_new(
+        user_id,
+        wsconnection_id,
+        session_id, 
+        question, 
+        embedding_endpoint, 
+        llm_endpoint, 
+        model_name, 
+        aos_endpoint, 
+        aos_index, 
+        aos_knn_field, 
+        aos_result_num,
+        Kendra_index_id, 
+        Kendra_result_num,
+        use_qa,
+        wsclient,
+        msgid,
+        max_tokens,
+        temperature,
+        prompt_template,
+        images_base64,
+        multi_rounds,
+        hide_ref,
+        use_stream,
+        example_index,
+        use_search,
+        refuse_strategy,
+        refuse_answer, 
+        email_reply_mode,
+        company  # 添加这个参数
+    )
     main_entry_elpase = time.time() - main_entry_start  # 或者使用 time.time_ns() 获取纳秒级别的时间戳
     logger.info(f'running time of main_entry : {main_entry_elpase}s seconds')
     if use_stream: ##只有当stream输出时，把这条trace放到最后一个chunk
